@@ -231,25 +231,123 @@
     );
   }
 
-  function ParliamentGrid({seatTotals, candidates, total=TOTAL_SEATS, majority=MAJORITY}) {
-    const sorted = [...(candidates||[])].sort((a,b)=>(seatTotals[b.id]||0)-(seatTotals[a.id]||0));
+  function ParliamentGrid({seatTotals, candidates, total=TOTAL_SEATS, majority=MAJORITY, coalitions=[]}) {
+    const leftClasses = [6, 7];   // Rural Workers, Factory Workers
+    const rightClasses = [2, 4];  // Merchants, Church
+    const leftTags = ["Land Reform", "State Intervention", "Cooperative Labour", "Grain Price Controls", "Public Works", "Industrialisation", "Railway Expansion", "Secularism", "Anti-Clericalism", "Popular Education", "Press Freedom", "Workers' Rights", "Women's Education", "Poor Relief", "Temperance", "Public Health", "Parliamentary Reform", "Federalism", "Expanded Suffrage", "Universal Suffrage", "Republican Sympathies", "Progressive", "Reformist", "Internationalist", "Mediation", "Peaceful Coexistence", "Defensive Posture", "Diplomatic Primacy"];
+    const rightTags = ["Free Trade", "Fiscal Conservatism", "Private Property", "Laissez-faire", "Agrarianism", "Clericalism", "Social Order", "Tradition", "Civic Nationalism", "Cultural Revival", "National Unity", "Absolute Monarchy", "Property Suffrage", "Conservative", "Opportunist", "Reactionary", "Elitist", "Nationalist", "Militarist", "Expansionism", "Isolationism", "Revanchism", "Military Readiness", "Tributary Ambitions"];
+
+    const getIdeologyScore = (party) => {
+      if (!party) return 0;
+      let score = 0;
+      const reasons = [];
+
+      // 1. Проверка по classBase
+      party.classBase?.forEach(classIdx => {
+        if (leftClasses.includes(classIdx)) {
+          score -= 2;
+          reasons.push(`classBase[${classIdx}]=${CLASSES[classIdx]} (-2 левая)`);
+        }
+        if (rightClasses.includes(classIdx)) {
+          score += 2;
+          reasons.push(`classBase[${classIdx}]=${CLASSES[classIdx]} (+2 правая)`);
+        }
+      });
+
+      // 2. Проверка по тегам
+      const partyTags = party.tags || [];
+      partyTags.forEach(tag => {
+        if (leftTags.includes(tag)) {
+          score -= 1;
+          reasons.push(`tag="${tag}" (-1 левая)`);
+        }
+        if (rightTags.includes(tag)) {
+          score += 1;
+          reasons.push(`tag="${tag}" (+1 правая)`);
+        }
+      });
+
+      // Логирование (только для отладки - раскомментируй если нужно)
+      // const ideology = score < 0 ? "ЛЕВАЯ" : score > 0 ? "ПРАВАЯ" : "ЦЕНТР";
+      // console.log(`🏛️ ${party.name} | Идеология: ${ideology} (${score > 0 ? '+' : ''}${score}) | ${reasons.length ? reasons.join(", ") : "нет факторов"}`);
+
+      return score;
+    };
+
+  // Сортировка слева направо (от левых к правым) по идеологическому сроку
+  const sorted = [...(candidates || [])].sort((a, b) => {
+    const scoreA = getIdeologyScore(a);
+    const scoreB = getIdeologyScore(b);
+    
+    if (scoreA !== scoreB) {
+      return scoreA - scoreB; // От самого маленького (левого) к большому (правому)
+    }
+    // Если идеология совпадает, вторичная сортировка по количеству мест
+    return (seatTotals[b.id] || 0) - (seatTotals[a.id] || 0);
+  });
+
+  // DEBUG: Проверим первую партию
+  if (!window._debugParliamentGrid && candidates.length > 0) {
+    console.log("🔍 ParliamentGrid - первая партия:", candidates[0]);
+    window._debugParliamentGrid = true;
+  }
+
   const rowSeats=[28,34,41,48,53], rowR=[85,105,125,145,165];
   const W=360, H=200, cx=W/2, cy=H-16;
 
-  const positions=[];
+  // 1. Создаём все позиции в полукруге
+  const allPositions=[];
   for(let row=0;row<5;row++){
     const n=rowSeats[row], r=rowR[row];
     for(let i=0;i<n;i++){
       const angle=Math.PI*(i/(n-1));
-      positions.push({angle, row, x: cx-r*Math.cos(angle), y: cy-r*Math.sin(angle)});
+      allPositions.push({angle, row, x: cx-r*Math.cos(angle), y: cy-r*Math.sin(angle)});
     }
   }
-  positions.sort((a,b)=> Math.abs(a.angle-b.angle)<0.001 ? a.row-b.row : a.angle-b.angle);
+  
+  // 2. Сортируем позиции для визуализации: волнообразно от левого края
+  // Идея: идём по углам, но чередуем ряды (от центра наружу, затем от края к центру)
+  // Это создаёт визуальную волну, которая распределяет партии левого-центро-правого
+  allPositions.sort((a,b)=> {
+    // Первый критерий: по абсолютному расстоянию от левого края
+    const distA = Math.abs(a.angle);
+    const distB = Math.abs(b.angle);
+    if (Math.abs(distA - distB) > 0.001) return distA - distB;
+    
+    // В пределах одного угла: чередуем идентичные позиции снаружи-внутрь
+    // Это создаёт зубцы, которые охватывают партии
+    return a.row - b.row;
+  });
 
+  // 3. Распределяем цвета партий (слева-направо по идеологии)
+  // Также отслеживаем какой партии каждое место принадлежит
   const colors=[];
-  sorted.forEach(c=>{ for(let i=0;i<(seatTotals[c.id]||0);i++) colors.push(c.color); });
-  while(colors.length<total) colors.push("rgba(255,255,255,0.12)");
-  const dots=positions.map((p,i)=>({...p,color:colors[i]}));
+  const partyForSeat = [];
+  sorted.forEach(c=>{ 
+    for(let i=0;i<(seatTotals[c.id]||0);i++) {
+      colors.push(c.color);
+      partyForSeat.push(c.id);
+    }
+  });
+  while(colors.length<total) {
+    colors.push("rgba(255,255,255,0.12)");
+    partyForSeat.push(null);
+  }
+  
+  // Создать mapping: партия ID → коалиция
+  const partyToCoalition = {};
+  coalitions.forEach(coal => {
+    (coal.memberIds || []).forEach(pId => {
+      partyToCoalition[pId] = coal;
+    });
+  });
+  
+  // 4. Создаём dots с правильными цветами и border коалиции
+  const dots = allPositions.map((p, idx) => {
+    const partyId = partyForSeat[idx];
+    const coal = partyId ? partyToCoalition[partyId] : null;
+    return {...p, color: colors[idx], stroke: coal ? coal.color : null};
+  });
 
     return (
       <div style={{background:"rgba(0,0,0,0.35)",borderRadius:"8px",padding:"10px 4px 2px",overflow:"hidden"}}>
@@ -263,7 +361,8 @@
         <text x={cx+3} y={cy-142} fill="rgba(201,168,76,0.8)" fontSize="7" fontFamily="Georgia,serif">MAJ</text>
         {dots.map((d,i)=>(
           <circle key={i} cx={d.x} cy={d.y} r="4.2"
-            fill={d.color} opacity={d.color==="rgba(255,255,255,0.12)"?.2:.9}/>
+            fill={d.color} opacity={d.color==="rgba(255,255,255,0.12)"?.2:.9}
+            stroke={d.stroke || "none"} strokeWidth={d.stroke ? "1.2" : "0"}/>
         ))}
       </svg>
       </div>
@@ -396,7 +495,12 @@
         <Card>
           {latestChamber ? (() => {
             const el = latestChamber;
-            const sortedR = [...(el.ranked||[])].sort((a,b)=>(el.seatTotals[b.id]||0)-(el.seatTotals[a.id]||0));
+            // Обогатим данные из el.ranked полной информацией из candidates
+            const enrichedRanked = (el.ranked || []).map(rankedParty => {
+              const fullPartyData = candidates.find(c => c.id === rankedParty.id);
+              return {...rankedParty, ...fullPartyData};
+            });
+            const sortedR = [...enrichedRanked].sort((a,b)=>(el.seatTotals[b.id]||0)-(el.seatTotals[a.id]||0));
             const w = el.winner;
             const wSeats = el.seatTotals[w.id]||0;
             return (
@@ -416,7 +520,7 @@
                 </div>
                 {/* Parliament grid */}
                 <div style={{marginBottom:"14px"}}>
-                  <ParliamentGrid seatTotals={el.seatTotals} candidates={el.ranked} total={el.totalSeats}/>
+                  <ParliamentGrid seatTotals={el.seatTotals} candidates={enrichedRanked} total={el.totalSeats} coalitions={coalitions}/>
                 </div>
                 {/* Per-party breakdown with delta vs previous */}
                 {(() => {
@@ -855,7 +959,7 @@
   }
 
   // ── ELECTIONS TAB ─────────────────────────────────────────────────────────
-  function ElectionsTab({electionHistory, candidates}) {
+  function ElectionsTab({electionHistory, candidates, coalitions=[]}) {
     const history = electionHistory||[];
     if (!history.length) return (
       <div style={{padding:"60px 20px",textAlign:"center",color:S,fontSize:"11px",letterSpacing:"2px",textTransform:"uppercase"}}>
@@ -881,10 +985,20 @@
           <span style={{fontSize:"9px",color:D,alignSelf:"center",marginLeft:"4px"}}>{filtered.length} result{filtered.length!==1?"s":""}</span>
         </div>
         {filtered.map(el=>{
-          const sortedRanked = [...(el.ranked||[])].sort((a,b)=>(el.seatTotals[b.id]||0)-(el.seatTotals[a.id]||0));
+          const enrichedRanked = (el.ranked || []).map(rankedParty => {
+            const fullPartyData = candidates.find(c => c.id === rankedParty.id);
+            const merged = {...rankedParty, ...fullPartyData};
+            // DEBUG
+            if (!window._debugElections) {
+              console.log(`Election - rankedParty: ${rankedParty.name}`, {rankedParty, fullPartyData, merged});
+              window._debugElections = true;
+            }
+            return merged;
+          });
+          const sortedRanked = [...enrichedRanked].sort((a,b)=>(el.seatTotals[b.id]||0)-(el.seatTotals[a.id]||0));
           const colorMap = {};
           candidates.forEach(c => { colorMap[c.id] = c.color; });
-          el.ranked?.forEach(r => { colorMap[r.id] = r.color; });
+          enrichedRanked?.forEach(r => { colorMap[r.id] = r.color; });
           return (
             <Card key={el.id} accent={el.winner.color}>
               <div style={{marginBottom:"14px"}}>
@@ -905,8 +1019,8 @@
 
               {/* Parliament semicircle */}
               <div style={{marginBottom:"12px"}}>
-                <ParliamentGrid seatTotals={el.seatTotals} candidates={el.ranked} total={el.totalSeats}
-                  majority={el.type==="senate"?SENATE_MAJ:MAJORITY}/>
+                <ParliamentGrid seatTotals={el.seatTotals} candidates={enrichedRanked} total={el.totalSeats}
+                  majority={el.type==="senate"?SENATE_MAJ:MAJORITY} coalitions={coalitions}/>
               </div>
 
               {/* Per-party breakdown with delta */}
@@ -1214,7 +1328,7 @@
       </div>
     );
 
-    const {turn,agitation,candidates,senateHolder,government} = state;
+    const {turn,agitation,candidates,senateHolder,government,coalitions} = state;
     const regionDescs = state.regionDescs || REGION_DESC;
     const data       = state.data||INITIAL_DATA.map(r=>[...r]);
     const natUnrest  = calcNatUnrest(agitation||Array(8).fill(0));
@@ -1287,7 +1401,7 @@
         {tab===1&&<RegionsTab candidates={candidates} data={data} agitation={agitation||Array(8).fill(0)} natUnrest={natUnrest} regionDescs={regionDescs}/>}
         {tab===2&&<PartiesTab candidates={candidates} data={data} agitation={agitation||Array(8).fill(0)} natUnrest={natUnrest} senateHolder={senateHolder} government={government}/>}
         {tab===3&&<LawsTab candidates={candidates} government={government}/>}
-        {tab===4&&<ElectionsTab electionHistory={elHistory} candidates={candidates}/>}
+        {tab===4&&<ElectionsTab electionHistory={elHistory} candidates={candidates} coalitions={coalitions}/>}
         {tab===5&&<DiplomacyTab nations={nations} wars={wars} deals={deals}/>}
 
         <div style={{textAlign:"center",padding:"20px",fontSize:"7px",color:D,letterSpacing:"4px",
